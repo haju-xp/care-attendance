@@ -305,19 +305,19 @@
   #btn-clock-out {
     display: block;
     width: 100%;
-    padding: 16px;
-    background: var(--success);
+    padding: 18px;
+    background: #f97316;
     color: #fff;
     border: none;
     border-radius: 12px;
-    font-size: 17px;
+    font-size: 18px;
     font-weight: 700;
     cursor: pointer;
     transition: background 0.15s, transform 0.1s;
     -webkit-tap-highlight-color: transparent;
     letter-spacing: 0.5px;
   }
-  #btn-clock-out:active { background: #059669; transform: scale(0.98); }
+  #btn-clock-out:active { background: #ea6c0a; transform: scale(0.98); }
 
   /* ===== 근무기록 탭 ===== */
   .month-nav {
@@ -902,24 +902,7 @@
             <div id="elapsed-time">0:00</div>
           </div>
 
-          <div class="slider-section">
-            <div class="slider-label-row">
-              <span class="slider-label">퇴근 시간 조정</span>
-              <span class="slider-value" id="checkout-time-display">--:--</span>
-            </div>
-            <div class="slider-controls">
-              <button class="slider-adj-btn" onclick="adjustSlider(-5)">−</button>
-              <input type="range" id="checkout-slider" min="0" max="1440" step="5" value="0" oninput="onSliderInput()">
-              <button class="slider-adj-btn" onclick="adjustSlider(5)">+</button>
-            </div>
-          </div>
-
-          <div id="pay-preview">
-            <span id="pay-preview-text">실근무 --h --m → 정산 --h --m</span>
-            <span id="pay-preview-badge" style="display:none;">↑ 반올림</span>
-          </div>
-
-          <button id="btn-clock-out" onclick="confirmClockOut()">퇴근 확정</button>
+          <button id="btn-clock-out" onclick="confirmClockOut()">퇴근하기</button>
         </div>
       </div>
 
@@ -1503,8 +1486,10 @@ function formatMin(min) {
 function confirmClockOut() {
   if (!clockInSession) return;
   const data = loadData();
+  const now = new Date();
   const inMin = clockInSession.time.getHours() * 60 + clockInSession.time.getMinutes();
-  const rawMin = sliderMinutes - inMin;
+  const outMin = now.getHours() * 60 + now.getMinutes();
+  const rawMin = outMin - inMin;
 
   if (rawMin < 0) {
     showToast('퇴근 시간이 출근 시간보다 빠릅니다');
@@ -1513,10 +1498,7 @@ function confirmClockOut() {
 
   const { baseMin, marginMin } = data.settings;
   const paidMin = calcPaid(rawMin, baseMin, marginMin);
-
-  const h = Math.floor(sliderMinutes / 60);
-  const m = sliderMinutes % 60;
-  const clockOutStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  const clockOutStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
   // 기록 업데이트
   const record = data.records.find(r => r.id === clockInSession.id);
