@@ -1,4 +1,4 @@
-const CACHE = 'care-v1';
+const CACHE = 'care-v2';
 const FILES = ['./index.html', './manifest.json'];
 
 self.addEventListener('install', e => {
