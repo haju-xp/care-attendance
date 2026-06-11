@@ -1427,6 +1427,7 @@ function exitMasterMode() {
 
 /* ===== 시계 ===== */
 function startClock() {
+  let lastDate = new Date().toDateString();
   function update() {
     const now = new Date();
     const days = ['일', '월', '화', '수', '목', '금', '토'];
@@ -1436,6 +1437,17 @@ function startClock() {
     const mm = String(now.getMinutes()).padStart(2, '0');
     const ss = String(now.getSeconds()).padStart(2, '0');
     document.getElementById('clock-time').textContent = `${hh}:${mm}:${ss}`;
+    // 자정 넘으면 출퇴근 탭 초기화
+    const todayStr = now.toDateString();
+    if (todayStr !== lastDate) {
+      lastDate = todayStr;
+      clearInterval(elapsedInterval);
+      clockInSession = null;
+      document.getElementById('before-clockin').style.display = '';
+      document.getElementById('after-clockin').style.display = 'none';
+      document.getElementById('today-record-card').style.display = 'none';
+      renderTodayRecord();
+    }
   }
   update();
   clockInterval = setInterval(update, 1000);
