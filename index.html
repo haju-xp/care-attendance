@@ -1003,6 +1003,12 @@
       </div>
 
       <div class="card settings-group">
+        <div class="card-title">데이터 마이그레이션</div>
+        <div style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">이 기기의 저장된 데이터를 Supabase로 올립니다. 기존 클라우드 데이터는 덮어쓰지 않고 없는 것만 추가합니다.</div>
+        <button class="btn-primary" onclick="migrateToSupabase()">📤 이 기기 데이터 Supabase로 올리기</button>
+      </div>
+
+      <div class="card settings-group">
         <div class="card-title" style="color: var(--danger);">위험 구역</div>
         <button class="btn-danger" onclick="confirmResetData()">전체 데이터 초기화</button>
       </div>
@@ -1266,6 +1272,45 @@ function sbSaveSettings(settings) {
   if (!sb) return;
   sb.from('settings').upsert({ id: 1, data: settings })
     .then(({ error }) => { if (error) console.warn('sb settings error', error); });
+}
+
+async function migrateToSupabase() {
+  if (!sb) { showToast('Supabase 연결 안됨'); return; }
+  const cached = localStorage.getItem(STORAGE_KEY);
+  if (!cached) { showToast('마이그레이션할 데이터가 없습니다'); return; }
+  const local = JSON.parse(cached);
+  const records = local.records || [];
+  if (records.length === 0) { showToast('저장된 기록이 없습니다'); return; }
+
+  showToast('업로드 중...');
+  try {
+    // 기존 Supabase 데이터 조회해서 없는 것만 추가
+    const { data: existing } = await sb.from('records').select('id');
+    const existingIds = new Set((existing || []).map(r => r.id));
+    const toUpload = records.filter(r => !existingIds.has(r.id));
+
+    if (toUpload.length === 0) {
+      showToast('이미 모두 동기화된 상태입니다');
+      return;
+    }
+
+    const rows = toUpload.map(r => ({
+      id: r.id, date: r.date,
+      clock_in: r.clockIn, clock_out: r.clockOut,
+      raw_min: r.rawMin, paid_min: r.paidMin,
+      extra_pay: r.extraPay || 0
+    }));
+    const { error } = await sb.from('records').insert(rows);
+    if (error) throw error;
+
+    // settings도 업로드
+    await sb.from('settings').upsert({ id: 1, data: local.settings || {} });
+
+    showToast(`✅ ${toUpload.length}건 업로드 완료!`);
+  } catch (e) {
+    console.error(e);
+    showToast('업로드 실패: ' + e.message);
+  }
 }
 
 function sbResetAll() {
