@@ -2125,7 +2125,17 @@ async function init() {
 document.addEventListener('DOMContentLoaded', init);
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js');
+  // ?reset=1 파라미터로 접속 시 SW + 캐시 전체 초기화
+  if (location.search.includes('reset=1')) {
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      regs.forEach(r => r.unregister());
+    });
+    caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+    history.replaceState(null, '', location.pathname);
+    location.reload();
+  } else {
+    navigator.serviceWorker.register('./sw.js');
+  }
 }
 </script>
 </body>
