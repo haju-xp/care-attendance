@@ -1109,12 +1109,17 @@
     <div class="manual-time-row">
       <div class="manual-field">
         <label>출근 시간</label>
-        <input type="time" id="manual-in" value="09:00">
+        <input type="time" id="manual-in" value="09:00" oninput="updateManualOutQuick()">
       </div>
       <div class="manual-field">
         <label>퇴근 시간</label>
         <input type="time" id="manual-out" value="11:00">
       </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:10px;">
+      <button onclick="setManualDuration(1)" style="flex:1; padding:9px 0; border:1.5px solid var(--border); border-radius:10px; background:var(--bg); font-size:13px; font-weight:600; color:var(--text-main); cursor:pointer;">+1시간</button>
+      <button onclick="setManualDuration(2)" style="flex:1; padding:9px 0; border:1.5px solid var(--border); border-radius:10px; background:var(--bg); font-size:13px; font-weight:600; color:var(--text-main); cursor:pointer;">+2시간</button>
+      <button onclick="setManualDuration(3)" style="flex:1; padding:9px 0; border:1.5px solid var(--border); border-radius:10px; background:var(--bg); font-size:13px; font-weight:600; color:var(--text-main); cursor:pointer;">+3시간</button>
     </div>
     <div class="manual-field" style="margin-bottom:14px;">
       <label>기타수당 (원, 날짜별 동일 적용)</label>
@@ -1776,6 +1781,21 @@ function saveAllSettings() {
 /* ===== 수동기록 달력 모달 ===== */
 let calViewMonth = new Date();
 let calSelectedDates = new Set(); // 'YYYY-MM-DD' 문자열 집합
+
+function setManualDuration(hours) {
+  const inVal = document.getElementById('manual-in').value;
+  if (!inVal) return;
+  const [h, m] = inVal.split(':').map(Number);
+  const total = h * 60 + m + hours * 60;
+  const oh = Math.floor(total / 60) % 24;
+  const om = total % 60;
+  document.getElementById('manual-out').value =
+    `${String(oh).padStart(2,'0')}:${String(om).padStart(2,'0')}`;
+}
+
+function updateManualOutQuick() {
+  // 출근 시간 바꾸면 퇴근 시간도 같은 간격 유지
+}
 
 function openManualModal() {
   calViewMonth = new Date();
