@@ -11,6 +11,30 @@
 <meta name="apple-mobile-web-app-title" content="출근기록">
 <meta name="theme-color" content="#5B8DEF">
 <style>
+  /* ===== PIN 잠금 ===== */
+  .pin-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 2px solid #9ca3af;
+    background: transparent;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .pin-dot.filled { background: #5B8DEF; border-color: #5B8DEF; }
+  .pin-key {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    border: 1.5px solid #e5e9f2;
+    background: #fff;
+    font-size: 22px;
+    font-weight: 600;
+    color: #1a1a2e;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.1s;
+  }
+  .pin-key:active { background: #EBF1FD; }
+
   /* ===== 리셋 및 기본 ===== */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -869,6 +893,33 @@
 </style>
 </head>
 <body>
+
+<!-- 앱 PIN 잠금 화면 -->
+<div id="pin-lock" style="position:fixed;inset:0;background:#f8f9fc;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;">
+  <div style="font-size:32px;">🍀</div>
+  <div style="font-size:20px;font-weight:700;color:#1a1a2e;">돌봄 선생님 출근 기록</div>
+  <div style="font-size:14px;color:#6b7280;">PIN을 입력하세요</div>
+  <div id="pin-dots" style="display:flex;gap:12px;margin:4px 0;">
+    <div class="pin-dot"></div><div class="pin-dot"></div>
+    <div class="pin-dot"></div><div class="pin-dot"></div>
+  </div>
+  <div id="pin-error" style="font-size:13px;color:#ef4444;height:18px;"></div>
+  <div style="display:grid;grid-template-columns:repeat(3,72px);gap:12px;">
+    <button class="pin-key" onclick="pinKey('1')">1</button>
+    <button class="pin-key" onclick="pinKey('2')">2</button>
+    <button class="pin-key" onclick="pinKey('3')">3</button>
+    <button class="pin-key" onclick="pinKey('4')">4</button>
+    <button class="pin-key" onclick="pinKey('5')">5</button>
+    <button class="pin-key" onclick="pinKey('6')">6</button>
+    <button class="pin-key" onclick="pinKey('7')">7</button>
+    <button class="pin-key" onclick="pinKey('8')">8</button>
+    <button class="pin-key" onclick="pinKey('9')">9</button>
+    <div></div>
+    <button class="pin-key" onclick="pinKey('0')">0</button>
+    <button class="pin-key" onclick="pinBackspace()" style="font-size:18px;">⌫</button>
+  </div>
+</div>
+
 <div id="app">
 
   <!-- 헤더 -->
@@ -1006,6 +1057,17 @@
         <div class="card-title">데이터 마이그레이션</div>
         <div style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">이 기기의 저장된 데이터를 Supabase로 올립니다. 기존 클라우드 데이터는 덮어쓰지 않고 없는 것만 추가합니다.</div>
         <button class="btn-primary" onclick="migrateToSupabase()">📤 이 기기 데이터 Supabase로 올리기</button>
+      </div>
+
+      <div class="card settings-group">
+        <div class="card-title">앱 잠금 PIN</div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">앱 PIN (4자리)</div>
+            <div class="setting-sublabel">앱 진입 시 요구하는 비밀번호</div>
+          </div>
+          <input type="password" class="setting-input" id="s-app-pin" placeholder="1234" inputmode="numeric" maxlength="4">
+        </div>
       </div>
 
       <div class="card settings-group">
@@ -1162,6 +1224,46 @@
 <div id="toast"></div>
 
 <script>
+/* ===== PIN 잠금 ===== */
+let pinInput = '';
+
+function pinKey(v) {
+  if (pinInput.length >= 4) return;
+  pinInput += v;
+  updatePinDots();
+  if (pinInput.length === 4) setTimeout(checkPin, 120);
+}
+
+function pinBackspace() {
+  pinInput = pinInput.slice(0, -1);
+  updatePinDots();
+}
+
+function updatePinDots() {
+  document.querySelectorAll('.pin-dot').forEach((d, i) => {
+    d.classList.toggle('filled', i < pinInput.length);
+  });
+}
+
+function checkPin() {
+  const correct = (data.settings.appPin || '1234');
+  if (pinInput === correct) {
+    sessionStorage.setItem('pinOk', '1');
+    document.getElementById('pin-lock').style.display = 'none';
+  } else {
+    document.getElementById('pin-error').textContent = 'PIN이 올바르지 않습니다';
+    const lock = document.getElementById('pin-lock');
+    lock.style.transform = 'translateX(-10px)';
+    setTimeout(() => lock.style.transform = 'translateX(10px)', 80);
+    setTimeout(() => lock.style.transform = '', 160);
+    pinInput = '';
+    setTimeout(() => {
+      updatePinDots();
+      document.getElementById('pin-error').textContent = '';
+    }, 500);
+  }
+}
+
 /* ===== 전역 상태 ===== */
 // 세션 기반 (리로드 시 초기화)
 let isMasterMode = false;
@@ -1203,7 +1305,8 @@ function getDefaultData() {
       hourlyRate: 15000,
       baseMin: 120,
       marginMin: 40,
-      masterPassword: '9089'
+      masterPassword: '9089',
+      appPin: '1234'
     },
     records: []
   };
@@ -1871,6 +1974,7 @@ function loadSettingsForm() {
   document.getElementById('s-hourly-rate').value = s.hourlyRate;
   document.getElementById('s-base-min').value = s.baseMin;
   document.getElementById('s-margin-min').value = s.marginMin;
+  document.getElementById('s-app-pin').value = s.appPin || '1234';
 }
 
 function saveAllSettings() {
@@ -1879,6 +1983,8 @@ function saveAllSettings() {
   data.settings.hourlyRate = parseInt(document.getElementById('s-hourly-rate').value) || 15000;
   data.settings.baseMin = parseInt(document.getElementById('s-base-min').value) || 120;
   data.settings.marginMin = parseInt(document.getElementById('s-margin-min').value) || 40;
+  const newPin = document.getElementById('s-app-pin').value;
+  if (newPin.length >= 4) data.settings.appPin = newPin;
   saveData(data);
   sbSaveSettings(data.settings);
   showToast('설정이 저장되었습니다');
@@ -2130,6 +2236,14 @@ async function init() {
   }
   // Supabase에서 데이터 로드 후 UI 초기화
   await initData();
+
+  // PIN 세션 확인
+  if (sessionStorage.getItem('pinOk') === '1') {
+    document.getElementById('pin-lock').style.display = 'none';
+  } else {
+    // PIN 화면 유지 (데이터 로드 후 correct pin 체크 가능하도록 준비)
+  }
+
   checkExistingClockIn();
   renderTodayRecord();
 }
