@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>돌봄 선생님 출근 기록</title>
 <link rel="manifest" href="manifest.json">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="출근기록">
@@ -1159,6 +1160,10 @@
 // 세션 기반 (리로드 시 초기화)
 let isMasterMode = false;
 
+// 인메모리 단일 데이터 소스 + Supabase 클라이언트
+let data = getDefaultData();
+let sb = null;
+
 // 헤더 탭 감지용
 let headerTapTimes = [];
 
@@ -1181,18 +1186,8 @@ let elapsedInterval = null;
 const STORAGE_KEY = 'childcare_attendance_v1';
 
 function loadData() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return getDefaultData();
-    const data = JSON.parse(raw);
-    // 기본값 병합
-    const defaults = getDefaultData();
-    data.settings = Object.assign({}, defaults.settings, data.settings);
-    data.records = data.records || [];
-    return data;
-  } catch {
-    return getDefaultData();
-  }
+  // 인메모리 전역 data 객체를 그대로 반환 (동기)
+  return data;
 }
 
 function getDefaultData() {
@@ -1208,8 +1203,76 @@ function getDefaultData() {
   };
 }
 
-function saveData(data) {
+function saveData(newData) {
+  // 인메모리 갱신 + localStorage 오프라인 캐시
+  data = newData;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+/* ===== Supabase 헬퍼 (fire-and-forget) ===== */
+function initSupabase() {
+  sb = supabase.createClient(
+    'https://mxevvhgtbnkfhqpwcwkv.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14ZXZ2aGd0Ym5rZmhxcHdjd2t2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExODAyNjEsImV4cCI6MjA5Njc1NjI2MX0.ouSjiEeZTgX0QL_qoB-SA8GdisC4dyZt-2ibsoH9eTk'
+  );
+}
+
+async function initData() {
+  initSupabase();
+  try {
+    const [{ data: sData }, { data: rData }] = await Promise.all([
+      sb.from('settings').select('data').eq('id', 1).maybeSingle(),
+      sb.from('records').select('*').order('date', { ascending: true })
+    ]);
+    const defaults = getDefaultData();
+    data = {
+      settings: sData?.data ? { ...defaults.settings, ...sData.data } : defaults.settings,
+      records: (rData || []).map(r => ({
+        id: r.id, date: r.date,
+        clockIn: r.clock_in, clockOut: r.clock_out,
+        rawMin: r.raw_min, paidMin: r.paid_min,
+        extraPay: r.extra_pay || 0
+      }))
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn('Supabase load failed, using localStorage', e);
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      const defaults = getDefaultData();
+      data = { settings: { ...defaults.settings, ...parsed.settings }, records: parsed.records || [] };
+    }
+  }
+}
+
+function sbUpsertRecord(record) {
+  if (!sb) return;
+  sb.from('records').upsert({
+    id: record.id, date: record.date,
+    clock_in: record.clockIn, clock_out: record.clockOut,
+    raw_min: record.rawMin, paid_min: record.paidMin,
+    extra_pay: record.extraPay || 0
+  }).then(({ error }) => { if (error) console.warn('sb upsert error', error); });
+}
+
+function sbDeleteRecord(id) {
+  if (!sb) return;
+  sb.from('records').delete().eq('id', id)
+    .then(({ error }) => { if (error) console.warn('sb delete error', error); });
+}
+
+function sbSaveSettings(settings) {
+  if (!sb) return;
+  sb.from('settings').upsert({ id: 1, data: settings })
+    .then(({ error }) => { if (error) console.warn('sb settings error', error); });
+}
+
+function sbResetAll() {
+  if (!sb) return;
+  const defaults = getDefaultData();
+  sb.from('records').delete().neq('id', '').then(() => {});
+  sb.from('settings').upsert({ id: 1, data: defaults.settings }).then(() => {});
 }
 
 /* ===== 설정 저장 ===== */
@@ -1381,6 +1444,7 @@ function clockIn() {
   clockInSession = { time: now, dateStr: todayStr, id };
   data.records.push({ id, date: todayStr, clockIn: `${hh}:${mm}`, clockOut: null, rawMin: null, paidMin: null });
   saveData(data);
+  sbUpsertRecord(data.records.find(r => r.id === id));
 
   showAfterClockIn();
   showToast(`출근 완료: ${hh}:${mm}`);
@@ -1508,6 +1572,7 @@ function confirmClockOut() {
     record.paidMin = paidMin;
   }
   saveData(data);
+  if (record) sbUpsertRecord(record);
 
   // 상태 초기화
   clearInterval(elapsedInterval);
@@ -1627,6 +1692,7 @@ function deleteRecord(id) {
     const data = loadData();
     data.records = data.records.filter(r => r.id !== id);
     saveData(data);
+    sbDeleteRecord(id);
     renderRecords();
     // 오늘 기록이면 출근 상태도 초기화
     if (clockInSession && clockInSession.id === id) {
@@ -1757,6 +1823,7 @@ function saveAllSettings() {
   data.settings.baseMin = parseInt(document.getElementById('s-base-min').value) || 120;
   data.settings.marginMin = parseInt(document.getElementById('s-margin-min').value) || 40;
   saveData(data);
+  sbSaveSettings(data.settings);
   showToast('설정이 저장되었습니다');
 }
 
@@ -1878,17 +1945,21 @@ function submitManualRecords() {
   const sorted = Array.from(calSelectedDates).sort();
   let added = 0, skipped = 0;
 
+  const newRecords = [];
   sorted.forEach(date => {
     const existing = data.records.find(r => r.date === date && r.clockOut);
     if (existing) { skipped++; return; }
     // 미완료 기록 있으면 덮어쓰기
     const pending = data.records.find(r => r.date === date && !r.clockOut);
     if (pending) data.records = data.records.filter(r => r.id !== pending.id);
-    data.records.push({ id: generateId(), date, clockIn, clockOut, rawMin, paidMin, extraPay });
+    const newRec = { id: generateId(), date, clockIn, clockOut, rawMin, paidMin, extraPay };
+    data.records.push(newRec);
+    newRecords.push(newRec);
     added++;
   });
 
   saveData(data);
+  newRecords.forEach(r => sbUpsertRecord(r));
   closeManualModal();
   const msg = skipped > 0
     ? `${added}건 추가 완료 (${skipped}건은 기존 기록 있어 건너뜀)`
@@ -1932,6 +2003,7 @@ function saveEditRecord() {
   const r = data.records.find(r => r.id === editingRecordId);
   if (r) { r.clockIn = clockIn; r.clockOut = clockOut; r.rawMin = rawMin; r.paidMin = paidMin; r.extraPay = extraPay; }
   saveData(data);
+  if (r) sbUpsertRecord(r);
   closeEditRecord();
   renderRecords();
   showToast('기록이 수정되었습니다');
@@ -1940,6 +2012,8 @@ function saveEditRecord() {
 function confirmResetData() {
   showConfirm('전체 데이터 초기화', '모든 근무 기록과 설정이 삭제됩니다. 복구할 수 없습니다. 계속하시겠습니까?', () => {
     localStorage.removeItem(STORAGE_KEY);
+    data = getDefaultData();
+    sbResetAll();
     clockInSession = null;
     clearInterval(elapsedInterval);
     document.getElementById('before-clockin').style.display = '';
@@ -1984,16 +2058,12 @@ function generateId() {
 }
 
 /* ===== 초기화 ===== */
-function init() {
+async function init() {
   setupHeaderTap();
   startClock();
-  checkExistingClockIn();
-  renderTodayRecord();
-
   const now = new Date();
   recordsViewMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   payslipViewMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
   // 새로고침 후 마스터 모드 복원
   if (sessionStorage.getItem('masterMode') === '1') {
     isMasterMode = true;
@@ -2001,6 +2071,10 @@ function init() {
     document.getElementById('btn-exit-master-header').style.display = '';
     document.getElementById('tab-settings').style.display = '';
   }
+  // Supabase에서 데이터 로드 후 UI 초기화
+  await initData();
+  checkExistingClockIn();
+  renderTodayRecord();
 }
 
 document.addEventListener('DOMContentLoaded', init);
