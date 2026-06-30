@@ -880,6 +880,8 @@
   .btn-primary:active { background: var(--primary-dark); }
 
   /* ===== 인쇄 스타일 ===== */
+  #payslip-print { display: none; }
+
   @media print {
     #header, #tab-bar, #toast, .modal-overlay,
     .btn-print, .month-nav { display: none !important; }
@@ -887,8 +889,39 @@
     #content { padding: 0; overflow: visible; height: auto; }
     .tab-panel { display: none !important; }
     #panel-payslip { display: block !important; }
+    #payslip-content { display: none !important; }
+    #payslip-print { display: block !important; }
     body { background: #fff; }
     .card { box-shadow: none; border: 1px solid #e5e5e5; }
+
+    /* 인쇄 명세서 스타일 */
+    .print-title { text-align: center; font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+    .print-period { text-align: center; font-size: 14px; color: #6b7280; margin-bottom: 20px; }
+    .print-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 8px; margin-bottom: 16px;
+    }
+    .print-grid-item {
+      background: #f8f9fc; border-radius: 8px; padding: 10px 12px; text-align: center;
+    }
+    .print-grid-item .pg-label { font-size: 11px; color: #9ca3af; margin-bottom: 2px; }
+    .print-grid-item .pg-value { font-size: 15px; font-weight: 700; color: #1a1a2e; }
+    .print-grid-item.highlight { background: #EBF1FD; }
+    .print-grid-item.highlight .pg-value { color: #3A6FD8; }
+    .print-table {
+      width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px;
+    }
+    .print-table th {
+      background: #EBF1FD; color: #3A6FD8; font-size: 11px; font-weight: 600;
+      padding: 8px 6px; text-align: center; border-bottom: 1px solid #e5e9f2;
+    }
+    .print-table td {
+      padding: 7px 6px; text-align: center; border-bottom: 1px solid #e5e9f2; color: #1a1a2e;
+    }
+    .print-table tr:last-child td { border-bottom: none; }
+    .print-table tfoot td {
+      font-weight: 700; border-top: 2px solid #1a1a2e; padding-top: 10px;
+    }
   }
 </style>
 </head>
@@ -1004,6 +1037,9 @@
       </div>
 
       <button class="btn-print" onclick="window.print()">🖨️ 인쇄 / PDF 저장</button>
+
+      <!-- 인쇄 전용 (화면에서 숨김) -->
+      <div id="payslip-print"></div>
     </div>
 
     <!-- 설정 탭 (관리자 전용) -->
@@ -1022,6 +1058,18 @@
             <div class="setting-sublabel">원/시간</div>
           </div>
           <input type="number" class="setting-input" id="s-hourly-rate" placeholder="15000">
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">은행</div>
+          </div>
+          <input type="text" class="setting-input" id="s-bank-name" placeholder="국민은행">
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">계좌번호</div>
+          </div>
+          <input type="text" class="setting-input" id="s-account-number" placeholder="000-0000-0000" inputmode="numeric">
         </div>
       </div>
 
@@ -1060,6 +1108,17 @@
       </div>
 
       <div class="card settings-group">
+        <div class="card-title">관리자 비밀번호</div>
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">새 비밀번호</div>
+            <div class="setting-sublabel">변경 시에만 입력 (4자리 이상)</div>
+          </div>
+          <input type="password" class="setting-input" id="s-new-master-pw" placeholder="미변경" inputmode="numeric" maxlength="8">
+        </div>
+      </div>
+
+      <div class="card settings-group">
         <div class="card-title">앱 잠금 PIN</div>
         <div class="setting-row">
           <div>
@@ -1091,7 +1150,7 @@
       <span class="tab-icon">📋</span>
       <span>근무기록</span>
     </button>
-    <button class="tab-btn" id="tab-payslip" onclick="switchTab('payslip')">
+    <button class="tab-btn" id="tab-payslip" style="display:none;" onclick="switchTab('payslip')">
       <span class="tab-icon">💰</span>
       <span>명세서</span>
     </button>
@@ -1267,6 +1326,10 @@ function checkPin() {
 /* ===== 전역 상태 ===== */
 // 세션 기반 (리로드 시 초기화)
 let isMasterMode = false;
+let masterPw = null;         // 관리자 비밀번호 평문 (세션 메모리에만, 복호화용)
+let decryptedAccount = '';   // 복호화된 계좌번호 (세션 메모리에만)
+let autoLockTimer = null;
+const AUTO_LOCK_MS = 3 * 60 * 1000; // 3분
 
 // 인메모리 단일 데이터 소스 + Supabase 클라이언트
 let data = getDefaultData();
@@ -1306,7 +1369,11 @@ function getDefaultData() {
       baseMin: 120,
       marginMin: 40,
       masterPassword: '9089',
-      appPin: '1234'
+      masterPasswordHash: '',
+      appPin: '1234',
+      bankName: '',
+      accountNumber: '',
+      encryptedAccount: ''
     },
     records: []
   };
@@ -1316,6 +1383,43 @@ function saveData(newData) {
   // 인메모리 갱신 + localStorage 오프라인 캐시
   data = newData;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+/* ===== 암호화 헬퍼 ===== */
+async function sha256(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function deriveKey(password, salt) {
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: new TextEncoder().encode(salt), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptText(text, password) {
+  if (!text) return '';
+  const key = await deriveKey(password, 'care-attendance-v1');
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text));
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(encrypted), iv.length);
+  return btoa(String.fromCharCode(...combined));
+}
+
+async function decryptText(encryptedBase64, password) {
+  if (!encryptedBase64) return '';
+  try {
+    const key = await deriveKey(password, 'care-attendance-v1');
+    const combined = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+    const iv = combined.slice(0, 12);
+    const ciphertext = combined.slice(12);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+    return new TextDecoder().decode(decrypted);
+  } catch { return ''; }
 }
 
 /* ===== Supabase 헬퍼 (fire-and-forget) ===== */
@@ -1343,6 +1447,13 @@ async function initData() {
         extraPay: r.extra_pay || 0
       }))
     };
+    // 로컬 캐시에서 암호화 데이터 복원 (Supabase보다 로컬이 최신일 수 있음)
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      const local = JSON.parse(cached);
+      if (local.settings?.encryptedAccount) data.settings.encryptedAccount = local.settings.encryptedAccount;
+      if (local.settings?.masterPasswordHash) data.settings.masterPasswordHash = local.settings.masterPasswordHash;
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch (e) {
     console.warn('Supabase load failed, using localStorage', e);
@@ -1352,6 +1463,18 @@ async function initData() {
       const defaults = getDefaultData();
       data = { settings: { ...defaults.settings, ...parsed.settings }, records: parsed.records || [] };
     }
+  }
+  // 마이그레이션: 평문 비밀번호 → 해시
+  if (data.settings.masterPassword && !data.settings.masterPasswordHash) {
+    data.settings.masterPasswordHash = await sha256(data.settings.masterPassword);
+    // 평문 계좌번호 → 암호화
+    if (data.settings.accountNumber) {
+      data.settings.encryptedAccount = await encryptText(data.settings.accountNumber, data.settings.masterPassword);
+      data.settings.accountNumber = '';
+    }
+    data.settings.masterPassword = '';
+    saveData(data);
+    sbSaveSettings(data.settings);
   }
 }
 
@@ -1373,7 +1496,10 @@ function sbDeleteRecord(id) {
 
 function sbSaveSettings(settings) {
   if (!sb) return;
-  sb.from('settings').upsert({ id: 1, data: settings })
+  const safe = { ...settings };
+  delete safe.masterPassword;  // 평문 비밀번호 전송 차단
+  delete safe.accountNumber;   // 평문 계좌 전송 차단
+  sb.from('settings').upsert({ id: 1, data: safe })
     .then(({ error }) => { if (error) console.warn('sb settings error', error); });
 }
 
@@ -1494,16 +1620,28 @@ function updatePwDisplay() {
   display.textContent = '●'.repeat(pwInput.length) || '';
 }
 
-function numpadConfirm() {
+async function numpadConfirm() {
   const data = loadData();
-  if (pwInput === data.settings.masterPassword) {
+  const inputHash = await sha256(pwInput);
+  // 해시 비교 (마이그레이션 완료 후) 또는 레거시 평문 비교
+  const hashMatch = data.settings.masterPasswordHash && inputHash === data.settings.masterPasswordHash;
+  const legacyMatch = !data.settings.masterPasswordHash && pwInput === data.settings.masterPassword;
+  if (hashMatch || legacyMatch) {
+    masterPw = pwInput; // 세션 메모리에만 보관 (복호화용)
     isMasterMode = true;
     sessionStorage.setItem('masterMode', '1');
+    sessionStorage.setItem('_mp', btoa(pwInput)); // 새로고침 복원용 (세션 종료 시 소멸)
     closeMasterModal();
+    // 계좌 복호화
+    if (data.settings.encryptedAccount) {
+      decryptedAccount = await decryptText(data.settings.encryptedAccount, masterPw);
+    }
     document.getElementById('master-badge').classList.add('visible');
     document.getElementById('btn-exit-master-header').style.display = '';
     document.getElementById('tab-settings').style.display = '';
+    document.getElementById('tab-payslip').style.display = '';
     if (activeTab === 'records') renderRecords();
+    startAutoLock();
     showToast('관리자 모드가 활성화되었습니다');
   } else {
     document.getElementById('modal-error').textContent = '비밀번호가 올바르지 않습니다';
@@ -1519,13 +1657,41 @@ function numpadConfirm() {
 
 function exitMasterMode() {
   isMasterMode = false;
+  masterPw = null;
+  decryptedAccount = '';
   sessionStorage.removeItem('masterMode');
+  sessionStorage.removeItem('_mp');
+  stopAutoLock();
   document.getElementById('master-badge').classList.remove('visible');
   document.getElementById('btn-exit-master-header').style.display = 'none';
   document.getElementById('tab-settings').style.display = 'none';
-  if (activeTab === 'settings') switchTab('attendance');
+  document.getElementById('tab-payslip').style.display = 'none';
+  if (activeTab === 'settings' || activeTab === 'payslip') switchTab('attendance');
   else if (activeTab === 'records') renderRecords();
   showToast('관리자 모드가 종료되었습니다');
+}
+
+/* ===== 자동 잠금 ===== */
+function startAutoLock() {
+  resetAutoLock();
+  ['touchstart','mousedown','keydown','scroll'].forEach(e =>
+    document.addEventListener(e, resetAutoLock, { passive: true }));
+}
+
+function resetAutoLock() {
+  if (autoLockTimer) clearTimeout(autoLockTimer);
+  if (!isMasterMode) return;
+  autoLockTimer = setTimeout(() => {
+    exitMasterMode();
+    showToast('3분 경과 — 관리자 모드가 자동 종료되었습니다');
+  }, AUTO_LOCK_MS);
+}
+
+function stopAutoLock() {
+  if (autoLockTimer) clearTimeout(autoLockTimer);
+  autoLockTimer = null;
+  ['touchstart','mousedown','keydown','scroll'].forEach(e =>
+    document.removeEventListener(e, resetAutoLock));
 }
 
 /* ===== 시계 ===== */
@@ -1707,6 +1873,14 @@ function formatMin(min) {
   return `${h}h ${m}m`;
 }
 
+function formatMinKo(min) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h === 0) return `${m}분`;
+  if (m === 0) return `${h}시간`;
+  return `${h}시간 ${m}분`;
+}
+
 function confirmClockOut() {
   if (!clockInSession) return;
   const data = loadData();
@@ -1878,7 +2052,8 @@ function renderPayslip() {
   document.getElementById('payslip-month-label').textContent = `${year}년 ${month+1}월`;
 
   const data = loadData();
-  const { teacherName, hourlyRate } = data.settings;
+  const { teacherName, hourlyRate, bankName } = data.settings;
+  const bankInfo = (bankName && decryptedAccount) ? `${bankName} ${decryptedAccount}` : '';
   const monthStr = `${year}-${String(month+1).padStart(2,'0')}`;
   const records = data.records
     .filter(r => r.date.startsWith(monthStr) && r.clockOut)
@@ -1891,6 +2066,7 @@ function renderPayslip() {
 
   if (records.length === 0) {
     content.innerHTML = `<div class="empty-state"><div class="empty-icon">💸</div>이 달의 근무 기록이 없습니다</div>`;
+    document.getElementById('payslip-print').innerHTML = '';
     return;
   }
 
@@ -1917,6 +2093,7 @@ function renderPayslip() {
     <div class="payslip-header">
       <div class="payslip-title">급여 명세서</div>
       <div class="payslip-period">${year}년 ${month+1}월</div>
+      ${bankInfo ? `<div style="font-size:13px; color:var(--text-sub); margin-top:8px;">계좌: ${bankInfo}</div>` : ''}
     </div>
     <div class="payslip-info-grid">
       <div class="payslip-info-item">
@@ -1964,6 +2141,84 @@ function renderPayslip() {
       <tbody>${rows}</tbody>
     </table>
   `;
+
+  renderPayslipPrint(year, month, records, hourlyRate, bankInfo);
+}
+
+function renderPayslipPrint(year, month, records, hourlyRate, bankInfo) {
+  const totalPaidMin = records.reduce((s, r) => s + (r.paidMin || 0), 0);
+  const totalDays = records.length;
+  const totalWagePay = records.reduce((s, r) => s + Math.round((r.paidMin / 60) * hourlyRate), 0);
+  const totalExtraPay = records.reduce((s, r) => s + (r.extraPay || 0), 0);
+  const totalPay = totalWagePay + totalExtraPay;
+
+  const rows = records.map(r => {
+    const wagePay = Math.round((r.paidMin / 60) * hourlyRate);
+    const extra = r.extraPay || 0;
+    const dayTotal = wagePay + extra;
+    return `<tr>
+      <td style="text-align:left; padding-left:10px;">${r.date}</td>
+      <td>${formatMinKo(r.paidMin)}</td>
+      <td>${wagePay.toLocaleString()}</td>
+      <td>${extra > 0 ? extra.toLocaleString() : '-'}</td>
+      <td style="font-weight:700;">${dayTotal.toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('payslip-print').innerHTML = `
+    <div class="print-title">급여 명세서</div>
+    <div class="print-period">${year}년 ${month+1}월</div>
+    ${bankInfo ? `<div style="text-align:center; font-size:12px; color:#6b7280; margin-bottom:16px;">계좌: ${bankInfo}</div>` : ''}
+    <div class="print-grid">
+      <div class="print-grid-item">
+        <div class="pg-label">시급</div>
+        <div class="pg-value">${hourlyRate.toLocaleString()}원</div>
+      </div>
+      <div class="print-grid-item">
+        <div class="pg-label">근무일수</div>
+        <div class="pg-value">${totalDays}일</div>
+      </div>
+      <div class="print-grid-item">
+        <div class="pg-label">총 근무시간</div>
+        <div class="pg-value">${formatMinKo(totalPaidMin)}</div>
+      </div>
+    </div>
+    <div class="print-grid">
+      <div class="print-grid-item">
+        <div class="pg-label">기본급 합계</div>
+        <div class="pg-value">${totalWagePay.toLocaleString()}원</div>
+      </div>
+      <div class="print-grid-item">
+        <div class="pg-label">기타수당 합계</div>
+        <div class="pg-value">${totalExtraPay.toLocaleString()}원</div>
+      </div>
+      <div class="print-grid-item highlight">
+        <div class="pg-label">총 지급액</div>
+        <div class="pg-value">${totalPay.toLocaleString()}원</div>
+      </div>
+    </div>
+    <table class="print-table">
+      <thead>
+        <tr>
+          <th style="text-align:left; padding-left:10px;">날짜</th>
+          <th>근무시간</th>
+          <th>기본급</th>
+          <th>기타수당</th>
+          <th>합계</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        <tr>
+          <td style="text-align:left; padding-left:10px;">합계</td>
+          <td>${formatMinKo(totalPaidMin)}</td>
+          <td>${totalWagePay.toLocaleString()}</td>
+          <td>${totalExtraPay > 0 ? totalExtraPay.toLocaleString() : '-'}</td>
+          <td>${totalPay.toLocaleString()}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `;
 }
 
 /* ===== 설정 폼 로드 ===== */
@@ -1975,16 +2230,40 @@ function loadSettingsForm() {
   document.getElementById('s-base-min').value = s.baseMin;
   document.getElementById('s-margin-min').value = s.marginMin;
   document.getElementById('s-app-pin').value = s.appPin || '1234';
+  document.getElementById('s-bank-name').value = s.bankName || '';
+  document.getElementById('s-account-number').value = decryptedAccount || '';
+  document.getElementById('s-new-master-pw').value = '';
 }
 
-function saveAllSettings() {
+async function saveAllSettings() {
   const data = loadData();
   data.settings.teacherName = document.getElementById('s-teacher-name').value || '선생님';
   data.settings.hourlyRate = parseInt(document.getElementById('s-hourly-rate').value) || 15000;
   data.settings.baseMin = parseInt(document.getElementById('s-base-min').value) || 120;
   data.settings.marginMin = parseInt(document.getElementById('s-margin-min').value) || 40;
+  data.settings.bankName = document.getElementById('s-bank-name').value || '';
   const newPin = document.getElementById('s-app-pin').value;
   if (newPin.length >= 4) data.settings.appPin = newPin;
+
+  // 관리자 비밀번호 변경
+  const newMasterPw = document.getElementById('s-new-master-pw').value;
+  if (newMasterPw && newMasterPw.length >= 4) {
+    masterPw = newMasterPw;
+    data.settings.masterPasswordHash = await sha256(newMasterPw);
+    data.settings.masterPassword = ''; // 레거시 평문 제거
+  }
+
+  // 계좌번호 암호화
+  const rawAccount = document.getElementById('s-account-number').value || '';
+  if (rawAccount && masterPw) {
+    data.settings.encryptedAccount = await encryptText(rawAccount, masterPw);
+    decryptedAccount = rawAccount;
+  } else if (!rawAccount) {
+    data.settings.encryptedAccount = '';
+    decryptedAccount = '';
+  }
+  data.settings.accountNumber = ''; // 평문 저장 안함
+
   saveData(data);
   sbSaveSettings(data.settings);
   showToast('설정이 저장되었습니다');
@@ -2230,12 +2509,21 @@ async function init() {
   // 새로고침 후 마스터 모드 복원
   if (sessionStorage.getItem('masterMode') === '1') {
     isMasterMode = true;
+    const mp = sessionStorage.getItem('_mp');
+    if (mp) masterPw = atob(mp);
     document.getElementById('master-badge').classList.add('visible');
     document.getElementById('btn-exit-master-header').style.display = '';
     document.getElementById('tab-settings').style.display = '';
+    document.getElementById('tab-payslip').style.display = '';
   }
   // Supabase에서 데이터 로드 후 UI 초기화
   await initData();
+
+  // 세션 복원 시 계좌 복호화
+  if (isMasterMode && masterPw && data.settings.encryptedAccount) {
+    decryptedAccount = await decryptText(data.settings.encryptedAccount, masterPw);
+    startAutoLock();
+  }
 
   // PIN 세션 확인
   if (sessionStorage.getItem('pinOk') === '1') {
