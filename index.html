@@ -2156,8 +2156,9 @@ function renderPayslipPrint(year, month, records, hourlyRate, bankInfo) {
     const wagePay = Math.round((r.paidMin / 60) * hourlyRate);
     const extra = r.extraPay || 0;
     const dayTotal = wagePay + extra;
+    const dow = ['일','월','화','수','목','금','토'][new Date(r.date+'T00:00:00').getDay()];
     return `<tr>
-      <td style="text-align:left; padding-left:10px;">${r.date}</td>
+      <td style="text-align:left; padding-left:10px;">${r.date} (${dow})</td>
       <td>${formatMinKo(r.paidMin)}</td>
       <td>${wagePay.toLocaleString()}</td>
       <td>${extra > 0 ? extra.toLocaleString() : '-'}</td>
